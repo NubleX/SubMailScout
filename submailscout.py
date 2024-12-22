@@ -26,7 +26,7 @@ def request_with_delay(url, verify=False):
 
 def regex(content):
     """Extract internal paths and resources from content."""
-    pattern = r'("|')(\/[^"']*?)("|')'
+    pattern = r'(\"|\')(\/[^\"']*?)(\"|\')'
     matches = re.findall(pattern, content)
     return [match[1] for match in matches]
 
