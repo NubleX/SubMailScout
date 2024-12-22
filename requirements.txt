@@ -3,3 +3,4 @@ beautifulsoup4
 dnspython
 dnsdumpster
 time
+fake_useragent
