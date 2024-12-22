@@ -15,7 +15,7 @@ Program that combines website enumeration, domain/subdomain discovery, and email
 ### Prerequisites:
 - Install the required Python libraries:
   ```bash
-  pip install requests beautifulsoup4 dnspython
+  pip install -r requirements.txt
   ```
 - Prepare a wordlist file for subdomain discovery (e.g., `wordlist.txt`).
 
