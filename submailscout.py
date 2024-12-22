@@ -4,6 +4,7 @@ import re
 from urllib.parse import urljoin
 from concurrent.futures import ThreadPoolExecutor
 import time
+import os
 
 def regex(content):
     """Extract internal paths and resources from content."""
@@ -31,19 +32,31 @@ def download_and_scan_file(url):
         print(f"Error processing file {url}: {e}")
     return emails
 
+def parse_robots_txt(base_url):
+    """Parse the robots.txt file for additional URLs."""
+    urls = set()
+    try:
+        robots_url = urljoin(base_url, '/robots.txt')
+        response = requests.get(robots_url, timeout=10, verify=False)
+        if response.status_code == 200:
+            for line in response.text.splitlines():
+                if line.lower().startswith('allow:') or line.lower().startswith('disallow:'):
+                    path = line.split(':', 1)[1].strip()
+                    if path and not path.startswith('#'):
+                        urls.add(urljoin(base_url, path))
+    except Exception as e:
+        print(f"Error fetching robots.txt: {e}")
+    return urls
+
 def get_links_and_resources(url):
     """Fetch links and resources from a given URL."""
     dir_arr = []
     try:
         response = requests.get(url, verify=False, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
-        scripts = soup.find_all('script')
-        for script in scripts:
-            try:
-                if script['src'] and script['src'].startswith('/'):
-                    dir_arr.append(urljoin(url, script['src']))
-            except KeyError:
-                pass
+        for a_tag in soup.find_all('a', href=True):
+            link = urljoin(url, a_tag['href'])
+            dir_arr.append(link)
         # Extract additional paths using regex on the HTML content
         regex_paths = regex(response.text)
         dir_arr.extend([urljoin(url, path) for path in regex_paths])
@@ -51,29 +64,40 @@ def get_links_and_resources(url):
         print(f"Error fetching resources from {url}: {e}")
     return set(dir_arr)
 
-def fetch_data(subdomain):
-    """Fetch emails and resources from a single subdomain."""
-    url = f"http://{subdomain}"
+def fetch_data(base_url):
+    """Fetch emails and resources from a single website."""
     emails = set()
     resources = set()
     try:
-        print(f"[INFO] Fetching data from {url}")
-        response = requests.get(url, timeout=10)
-        emails.update(harvest_emails(response.text))
-        resources.update(get_links_and_resources(url))
+        print(f"[INFO] Fetching data from {base_url}")
 
-        # Check resources for downloadable files
-        for resource in resources:
-            emails.update(download_and_scan_file(resource))
+        # Parse robots.txt for additional paths
+        resources.update(parse_robots_txt(base_url))
+
+        # Get links and resources from the main page
+        resources.update(get_links_and_resources(base_url))
+
+        # Process each resource for emails and downloadable files
+        for resource in resources.copy():
+            try:
+                response = requests.get(resource, timeout=10, verify=False)
+                emails.update(harvest_emails(response.text))
+                emails.update(download_and_scan_file(resource))
+
+                # Recursively fetch links and resources for deeper mapping
+                sub_resources = get_links_and_resources(resource)
+                resources.update(sub_resources)
+            except Exception as e:
+                print(f"Error processing resource {resource}: {e}")
     except Exception as e:
-        print(f"Error fetching {url}: {e}")
-    return subdomain, emails, resources
+        print(f"Error fetching {base_url}: {e}")
+    return base_url, emails, resources
 
 def main():
-    print("Email Harvester and Resource Enumerator")
+    print("Email Harvester and Website Mapper")
     domain = input("Enter the target domain (e.g., example.com): ").strip()
 
-    print("\n[+] Fetching resources and emails...")
+    print("\n[+] Mapping the website and harvesting emails...")
     start_time = time.time()
 
     emails = set()
@@ -81,10 +105,10 @@ def main():
 
     # Multi-threaded fetching
     with ThreadPoolExecutor(max_workers=10) as executor:
-        future = executor.submit(fetch_data, domain)
-        subdomain, sub_emails, sub_resources = future.result()
-        emails.update(sub_emails)
-        all_resources.update(sub_resources)
+        future = executor.submit(fetch_data, f"http://{domain}")
+        base_url, found_emails, found_resources = future.result()
+        emails.update(found_emails)
+        all_resources.update(found_resources)
 
     elapsed_time = time.time() - start_time
     print(f"[+] Found {len(emails)} email addresses in {elapsed_time:.2f} seconds.")
