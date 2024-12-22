@@ -4,7 +4,6 @@ import re
 import dns.resolver
 from urllib.parse import urljoin
 from concurrent.futures import ThreadPoolExecutor
-import dnsdumpster
 import time
 
 def harvest_emails(html_content):
@@ -27,33 +26,22 @@ def get_links(domain):
         print(f"Error fetching links from {domain}: {e}")
         return set()
 
-def find_subdomains(domain, wordlist):
-    """Discover subdomains using a wordlist."""
-    subdomains = []
-    with open(wordlist, 'r') as file:
-        words = file.read().splitlines()
-        for idx, word in enumerate(words):
-            subdomain = f"{word}.{domain}"
-            print(f"[DEBUG] Testing subdomain {idx + 1}/{len(words)}: {subdomain}")
-            try:
-                dns.resolver.resolve(subdomain, 'A')
-                print(f"[SUCCESS] Resolved: {subdomain}")
-                subdomains.append(subdomain)
-            except:
-                pass
-    return subdomains
-
-def fetch_subdomains_dnsdumpster(domain):
-    """Fetch subdomains using dnsdumpster."""
+def find_subdomains_by_dns(domain):
+    """Find subdomains by querying DNS."""
+    subdomains = set()
+    print("[INFO] Querying DNS for subdomains...")
     try:
-        print("[INFO] Querying DNSDumpster...")
-        dnsdumpster_data = dnsdumpster.DNSDumpsterAPI(True).search(domain)
-        subdomains = [entry['domain'] for entry in dnsdumpster_data['dns_records']['host']] if dnsdumpster_data else []
-        print(f"[INFO] DNSDumpster found {len(subdomains)} subdomains.")
-        return subdomains
+        resolver = dns.resolver.Resolver()
+        for record_type in ['A', 'CNAME']:
+            try:
+                answers = resolver.resolve(domain, record_type)
+                for answer in answers:
+                    subdomains.add(answer.target.to_text().strip('.'))
+            except Exception:
+                pass
     except Exception as e:
-        print(f"Error fetching subdomains from dnsdumpster: {e}")
-        return []
+        print(f"Error finding subdomains: {e}")
+    return list(subdomains)
 
 def fetch_subdomain_data(subdomain):
     """Fetch emails and links from a single subdomain."""
@@ -71,14 +59,12 @@ def fetch_subdomain_data(subdomain):
 
 def main():
     print("Email Harvester and Subdomain Enumerator")
-    domain = input("Enter the target domain (e.g., https://example.com): ").strip()
-    wordlist = input("Enter the path to your subdomain wordlist: ").strip()
+    domain = input("Enter the target domain (e.g., example.com): ").strip()
 
     print("\n[+] Enumerating subdomains...")
     start_time = time.time()
-    wordlist_subdomains = find_subdomains(domain.replace('https://', '').replace('http://', ''), wordlist)
-    dnsdumpster_subdomains = fetch_subdomains_dnsdumpster(domain.replace('https://', '').replace('http://', ''))
-    subdomains = set(wordlist_subdomains + dnsdumpster_subdomains)
+    dns_subdomains = find_subdomains_by_dns(domain)
+    subdomains = set(dns_subdomains)
     elapsed_time = time.time() - start_time
     print(f"[+] Found {len(subdomains)} subdomains in {elapsed_time:.2f} seconds.")
 
