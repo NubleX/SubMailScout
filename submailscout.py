@@ -5,6 +5,7 @@ import dns.resolver
 from urllib.parse import urljoin
 from concurrent.futures import ThreadPoolExecutor
 import dnsdumpster
+import time
 
 def harvest_emails(html_content):
     """Extract email addresses from HTML content."""
@@ -31,10 +32,12 @@ def find_subdomains(domain, wordlist):
     subdomains = []
     with open(wordlist, 'r') as file:
         words = file.read().splitlines()
-        for word in words:
+        for idx, word in enumerate(words):
             subdomain = f"{word}.{domain}"
+            print(f"[DEBUG] Testing subdomain {idx + 1}/{len(words)}: {subdomain}")
             try:
                 dns.resolver.resolve(subdomain, 'A')
+                print(f"[SUCCESS] Resolved: {subdomain}")
                 subdomains.append(subdomain)
             except:
                 pass
@@ -43,8 +46,10 @@ def find_subdomains(domain, wordlist):
 def fetch_subdomains_dnsdumpster(domain):
     """Fetch subdomains using dnsdumpster."""
     try:
+        print("[INFO] Querying DNSDumpster...")
         dnsdumpster_data = dnsdumpster.DNSDumpsterAPI(True).search(domain)
         subdomains = [entry['domain'] for entry in dnsdumpster_data['dns_records']['host']] if dnsdumpster_data else []
+        print(f"[INFO] DNSDumpster found {len(subdomains)} subdomains.")
         return subdomains
     except Exception as e:
         print(f"Error fetching subdomains from dnsdumpster: {e}")
@@ -56,6 +61,7 @@ def fetch_subdomain_data(subdomain):
     emails = set()
     links = set()
     try:
+        print(f"[INFO] Fetching data from {url}")
         response = requests.get(url, timeout=10)
         emails.update(harvest_emails(response.text))
         links.update(get_links(url))
@@ -69,10 +75,12 @@ def main():
     wordlist = input("Enter the path to your subdomain wordlist: ").strip()
 
     print("\n[+] Enumerating subdomains...")
+    start_time = time.time()
     wordlist_subdomains = find_subdomains(domain.replace('https://', '').replace('http://', ''), wordlist)
     dnsdumpster_subdomains = fetch_subdomains_dnsdumpster(domain.replace('https://', '').replace('http://', ''))
     subdomains = set(wordlist_subdomains + dnsdumpster_subdomains)
-    print(f"[+] Found {len(subdomains)} subdomains.")
+    elapsed_time = time.time() - start_time
+    print(f"[+] Found {len(subdomains)} subdomains in {elapsed_time:.2f} seconds.")
 
     print("\n[+] Extracting links and harvesting emails...")
     emails = set()
