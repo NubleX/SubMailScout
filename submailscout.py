@@ -5,10 +5,28 @@ from urllib.parse import urljoin
 from concurrent.futures import ThreadPoolExecutor
 import time
 import os
+import random
+from fake_useragent import UserAgent
+
+# Disable insecure request warnings
+def disable_insecure_request_warning():
+    from requests.packages.urllib3.exceptions import InsecureRequestWarning
+    requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+def get_random_user_agent():
+    """Generate a random User-Agent string."""
+    ua = UserAgent()
+    return ua.random
+
+def request_with_delay(url, verify=False):
+    """Make a request with a random delay and User-Agent."""
+    headers = {"User-Agent": get_random_user_agent()}
+    time.sleep(random.uniform(0.5, 2.0))  # Random delay between 0.5 to 2 seconds
+    return requests.get(url, headers=headers, verify=verify, timeout=10)
 
 def regex(content):
     """Extract internal paths and resources from content."""
-    pattern = r'("|\')(\/[^\"\']*?)("|\')'
+    pattern = r'("|')(\/[^"']*?)("|')'
     matches = re.findall(pattern, content)
     return [match[1] for match in matches]
 
@@ -23,7 +41,7 @@ def download_and_scan_file(url):
     file_extensions = ['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ods']
     emails = set()
     try:
-        response = requests.get(url, stream=True, timeout=10, verify=False)
+        response = request_with_delay(url)
         content_type = response.headers.get('Content-Type', '').lower()
         if any(ext in content_type for ext in file_extensions):
             file_content = response.content.decode(errors='ignore')
@@ -37,7 +55,7 @@ def parse_robots_txt(base_url):
     urls = set()
     try:
         robots_url = urljoin(base_url, '/robots.txt')
-        response = requests.get(robots_url, timeout=10, verify=False)
+        response = request_with_delay(robots_url)
         if response.status_code == 200:
             for line in response.text.splitlines():
                 if line.lower().startswith('allow:') or line.lower().startswith('disallow:'):
@@ -52,7 +70,7 @@ def get_links_and_resources(url):
     """Fetch links and resources from a given URL."""
     dir_arr = []
     try:
-        response = requests.get(url, verify=False, timeout=10)
+        response = request_with_delay(url)
         soup = BeautifulSoup(response.text, 'html.parser')
         for a_tag in soup.find_all('a', href=True):
             link = urljoin(url, a_tag['href'])
@@ -80,7 +98,7 @@ def fetch_data(base_url):
         # Process each resource for emails and downloadable files
         for resource in resources.copy():
             try:
-                response = requests.get(resource, timeout=10, verify=False)
+                response = request_with_delay(resource)
                 emails.update(harvest_emails(response.text))
                 emails.update(download_and_scan_file(resource))
 
@@ -94,6 +112,7 @@ def fetch_data(base_url):
     return base_url, emails, resources
 
 def main():
+    disable_insecure_request_warning()
     print("Email Harvester and Website Mapper")
     domain = input("Enter the target domain (e.g., example.com): ").strip()
 
@@ -104,7 +123,7 @@ def main():
     all_resources = set()
 
     # Multi-threaded fetching
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=30) as executor:
         future = executor.submit(fetch_data, f"http://{domain}")
         base_url, found_emails, found_resources = future.result()
         emails.update(found_emails)
