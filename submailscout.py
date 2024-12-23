@@ -43,7 +43,7 @@ def harvest_emails(content):
     return valid_emails
 
 def regex(content):
-    pattern = r'("|')(\/[\w\d\?\/&=#.!:_-]+)("|')'
+pattern = r'(\"|\')(\\/[\\w\\d\\?\\/&=#.!:_-]+)(\"|\')'
     matches = re.findall(pattern, content)
     response = ""
     i = 0
