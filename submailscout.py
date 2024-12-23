@@ -92,9 +92,24 @@ def fetch_emails_from_url(url):
         print(f"Error fetching emails from {url}: {e}")
     return emails
 
+def scan_directories(base_url):
+    """Scan directories on the domain for additional paths."""
+    directories = set()
+    common_paths = ["admin", "login", "dashboard", "user", "api", "wp-admin", "uploads", "images"]
+    for path in common_paths:
+        url = urljoin(base_url, path)
+        try:
+            response = request_with_delay(url)
+            if response.status_code == 200:
+                directories.add(url)
+        except Exception as e:
+            print(f"Error scanning directory {url}: {e}")
+    return directories
+
 def fetch_emails_and_subdomains(base_url):
     """Fetch emails and map subdomains from the specified domain."""
     emails = set()
+    directories = set()
     visited = set()
     to_visit = {base_url}
 
@@ -110,24 +125,24 @@ def fetch_emails_and_subdomains(base_url):
         # Parse robots.txt for potential subdomains or paths
         if current_url == base_url:
             to_visit.update(parse_robots_txt(base_url))
+            directories.update(scan_directories(base_url))
 
-    return emails
+    return emails, directories
 
 def main():
     disable_insecure_request_warning()
-    parser = argparse.ArgumentParser(description='Email Harvester and Subdomain Mapper')
-    parser.add_argument('-u', help='Target domain (e.g., example.com)', required=True)
-    parser.add_argument('-o', help='Output file for emails.', nargs="?")
-    args = parser.parse_args()
+
+    print("Enter the target domain (e.g., example.com):", end=" ")
+    target_domain = input().strip()
 
     print("\n[+] Mapping the domain and harvesting emails...")
     start_time = time.time()
 
-    base_url = f"http://{args.u}"
-    emails = fetch_emails_and_subdomains(base_url)
+    base_url = f"http://{target_domain}"
+    emails, directories = fetch_emails_and_subdomains(base_url)
 
     elapsed_time = time.time() - start_time
-    print(f"[+] Found {len(emails)} email addresses in {elapsed_time:.2f} seconds.")
+    print(f"[+] Found {len(emails)} email addresses and {len(directories)} directories in {elapsed_time:.2f} seconds.")
 
     # Print results
     print("\n--- Results ---")
@@ -135,11 +150,9 @@ def main():
     for email in emails:
         print(email)
 
-    # Save results to file if specified
-    if args.o:
-        with open(args.o, 'w') as f:
-            for email in emails:
-                f.write(email + '\n')
+    print("\nDirectories:")
+    for directory in directories:
+        print(directory)
 
 if __name__ == "__main__":
     main()
