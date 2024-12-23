@@ -8,6 +8,7 @@ import random
 from fake_useragent import UserAgent
 import socket
 from contextlib import closing
+import json
 
 # Disable insecure request warnings
 def disable_insecure_request_warning():
@@ -42,7 +43,7 @@ def harvest_emails(content):
     return valid_emails
 
 def regex(content):
-    pattern = r'(\"|\')(\/[^\"\']*?)(\"|\')'
+    pattern = r'("|')(\/[^"\']*?)("|')'
     matches = re.findall(pattern, content)
     response = ""
     i = 0
@@ -108,30 +109,47 @@ def scan_directories(base_url):
             print(f"Error scanning directory {url}: {e}")
     return directories
 
-def fetch_emails_and_subdomains(base_url):
+def enumerate_subdomains(domain):
+    """Enumerate subdomains using multiple online sources."""
+    subdomains = set()
+    engines = ["https://crt.sh/?q=%25.{domain}",
+               "https://api.sublist3r.com/search.php?domain={domain}"]
+
+    for engine in engines:
+        try:
+            engine_url = engine.format(domain=domain)
+            print(f"[INFO] Querying: {engine_url}")
+            response = request_with_delay(engine_url)
+            subdomains.update(re.findall(r'\b(?:[a-zA-Z0-9.-]+\.){1,}[a-zA-Z]{2,}\b', response.text))
+        except Exception as e:
+            print(f"Error querying {engine}: {e}")
+
+    # Filter and sort unique subdomains
+    subdomains = {sub for sub in subdomains if domain in sub and sub != domain}
+    return subdomains
+
+def fetch_emails_and_subdomains(base_url, domain):
     """Fetch emails and map subdomains from the specified domain."""
     emails = set()
     directories = set()
-    visited = set()
-    to_visit = {base_url}
 
-    while to_visit:
-        current_url = to_visit.pop()
-        if current_url in visited:
-            continue
-        visited.add(current_url)
+    print("[INFO] Enumerating subdomains...")
+    subdomains = enumerate_subdomains(domain)
 
-        print(f"[INFO] Fetching emails from: {current_url}")
-        emails.update(fetch_emails_from_url(current_url))
+    for subdomain in subdomains:
+        sub_url = f"http://{subdomain}"
+        print(f"[INFO] Processing subdomain: {sub_url}")
+        emails.update(fetch_emails_from_url(sub_url))
 
-        # Parse robots.txt for potential subdomains or paths
-        if current_url == base_url:
-            new_urls = parse_robots_txt(base_url)
-            to_visit.update(new_urls)
-            directories.update(scan_directories(base_url))
-            print(f"[DEBUG] Found {len(new_urls)} new URLs and {len(directories)} directories.")
+        # Scan directories in the subdomain
+        directories.update(scan_directories(sub_url))
 
-    return emails, directories
+    # Fetch emails and directories from the main domain
+    print(f"[INFO] Processing main domain: {base_url}")
+    emails.update(fetch_emails_from_url(base_url))
+    directories.update(scan_directories(base_url))
+
+    return emails, directories, subdomains
 
 def main():
     disable_insecure_request_warning()
@@ -143,10 +161,10 @@ def main():
     start_time = time.time()
 
     base_url = f"http://{target_domain}"
-    emails, directories = fetch_emails_and_subdomains(base_url)
+    emails, directories, subdomains = fetch_emails_and_subdomains(base_url, target_domain)
 
     elapsed_time = time.time() - start_time
-    print(f"[+] Found {len(emails)} email addresses and {len(directories)} directories in {elapsed_time:.2f} seconds.")
+    print(f"[+] Found {len(emails)} email addresses, {len(directories)} directories, and {len(subdomains)} subdomains in {elapsed_time:.2f} seconds.")
 
     # Print results
     print("\n--- Results ---")
@@ -157,6 +175,10 @@ def main():
     print("\nDirectories:")
     for directory in directories:
         print(directory)
+
+    print("\nSubdomains:")
+    for subdomain in subdomains:
+        print(subdomain)
 
 if __name__ == "__main__":
     main()
