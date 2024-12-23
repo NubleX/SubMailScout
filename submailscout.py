@@ -8,7 +8,6 @@ import random
 from fake_useragent import UserAgent
 import socket
 from contextlib import closing
-import argparse
 
 # Disable insecure request warnings
 def disable_insecure_request_warning():
@@ -75,6 +74,7 @@ def fetch_emails_from_url(url):
     """Fetch emails from the specified URL."""
     emails = set()
     try:
+        print(f"[INFO] Scanning URL: {url}")
         response = request_with_delay(url)
         emails.update(harvest_emails(response.text))
         # Additional scraping from scripts
@@ -84,6 +84,7 @@ def fetch_emails_from_url(url):
             try:
                 if script.get('src') and script['src'].startswith('/'):
                     script_url = urljoin(url, script['src'])
+                    print(f"[DEBUG] Fetching script: {script_url}")
                     script_response = request_with_delay(script_url)
                     emails.update(harvest_emails(script_response.text))
             except Exception as e:
@@ -99,6 +100,7 @@ def scan_directories(base_url):
     for path in common_paths:
         url = urljoin(base_url, path)
         try:
+            print(f"[INFO] Scanning directory: {url}")
             response = request_with_delay(url)
             if response.status_code == 200:
                 directories.add(url)
@@ -119,13 +121,15 @@ def fetch_emails_and_subdomains(base_url):
             continue
         visited.add(current_url)
 
-        print(f"[DEBUG] Fetching emails from: {current_url}")
+        print(f"[INFO] Fetching emails from: {current_url}")
         emails.update(fetch_emails_from_url(current_url))
 
         # Parse robots.txt for potential subdomains or paths
         if current_url == base_url:
-            to_visit.update(parse_robots_txt(base_url))
+            new_urls = parse_robots_txt(base_url)
+            to_visit.update(new_urls)
             directories.update(scan_directories(base_url))
+            print(f"[DEBUG] Found {len(new_urls)} new URLs and {len(directories)} directories.")
 
     return emails, directories
 
