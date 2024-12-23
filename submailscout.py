@@ -8,6 +8,7 @@ import random
 from fake_useragent import UserAgent
 import socket
 from contextlib import closing
+import argparse
 
 # Disable insecure request warnings
 def disable_insecure_request_warning():
@@ -41,6 +42,19 @@ def harvest_emails(content):
     valid_emails = {email for email in emails if not email.endswith(('.js', '.css', '.jpg', '.png', '.gif', '.svg'))}
     return valid_emails
 
+def regex(content):
+    pattern = r'(\"|\')(\/[^\"\']*?)(\"|\')'
+    matches = re.findall(pattern, content)
+    response = ""
+    i = 0
+    for match in matches:
+        i += 1
+        if i == len(matches):
+            response += match[1]
+        else:
+            response += match[1] + "\n"
+    return response
+
 def parse_robots_txt(base_url):
     """Parse the robots.txt file for additional URLs."""
     urls = set()
@@ -63,6 +77,17 @@ def fetch_emails_from_url(url):
     try:
         response = request_with_delay(url)
         emails.update(harvest_emails(response.text))
+        # Additional scraping from scripts
+        soup = BeautifulSoup(response.text, 'html5lib')
+        scripts = soup.find_all('script')
+        for script in scripts:
+            try:
+                if script.get('src') and script['src'].startswith('/'):
+                    script_url = urljoin(url, script['src'])
+                    script_response = request_with_delay(script_url)
+                    emails.update(harvest_emails(script_response.text))
+            except Exception as e:
+                print(f"Error fetching script: {e}")
     except Exception as e:
         print(f"Error fetching emails from {url}: {e}")
     return emails
@@ -90,13 +115,15 @@ def fetch_emails_and_subdomains(base_url):
 
 def main():
     disable_insecure_request_warning()
-    print("Email Harvester and Subdomain Mapper")
-    domain = input("Enter the target domain (e.g., example.com): ").strip()
+    parser = argparse.ArgumentParser(description='Email Harvester and Subdomain Mapper')
+    parser.add_argument('-u', help='Target domain (e.g., example.com)', required=True)
+    parser.add_argument('-o', help='Output file for emails.', nargs="?")
+    args = parser.parse_args()
 
     print("\n[+] Mapping the domain and harvesting emails...")
     start_time = time.time()
 
-    base_url = f"http://{domain}"
+    base_url = f"http://{args.u}"
     emails = fetch_emails_and_subdomains(base_url)
 
     elapsed_time = time.time() - start_time
@@ -107,6 +134,12 @@ def main():
     print("Emails:")
     for email in emails:
         print(email)
+
+    # Save results to file if specified
+    if args.o:
+        with open(args.o, 'w') as f:
+            for email in emails:
+                f.write(email + '\n')
 
 if __name__ == "__main__":
     main()
