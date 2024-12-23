@@ -4,3 +4,5 @@ dnspython
 dnsdumpster
 time
 fake_useragent
+aiohttp
+tqdm
