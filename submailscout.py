@@ -142,7 +142,6 @@ class WebScanner:
         return results
 
     async def fetch_url(self, url: str, is_file: bool = False) -> Tuple[bytes, str, int]:
-        """Fetch URL content with enhanced file type detection."""
         async with self.rate_limiter:
             try:
                 if not url.startswith(('http://', 'https://')):
@@ -152,10 +151,14 @@ class WebScanner:
                 self.logger.info(f"Fetching: {url}")
                 await asyncio.sleep(random.uniform(0.5, 1.5))
                 
-                async with self.session.get(url, ssl=False) as response:
-                    content = await response.read()
-                    content_type = response.headers.get('Content-Type', '')
-                    return content, content_type, response.status
+                try:
+                    async with self.session.get(url, ssl=False) as response:
+                        content = await response.read()
+                        content_type = response.headers.get('Content-Type', '')
+                        return content, content_type, response.status
+                except aiohttp.ClientConnectorError:
+                    self.logger.error(f"Connection failed for {url}")
+                    return b"", "", 0
             except Exception as e:
                 self.logger.error(f"Error fetching {url}: {str(e)}")
                 return b"", "", 0
