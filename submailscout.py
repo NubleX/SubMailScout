@@ -19,6 +19,7 @@ import xlrd  # for Excel files
 import magic  # python-magic for file type detection
 from yarl import URL
 import hashlib
+import json
 
 class WebScanner:
     def __init__(self, base_url: str, max_workers: int = 10, timeout: int = 30):
