@@ -20,6 +20,8 @@ import magic  # python-magic for file type detection
 from yarl import URL
 import hashlib
 import json
+import urllib.parse
+import io
 
 class WebScanner:
     def __init__(self, base_url: str, max_workers: int = 10, timeout: int = 30):
@@ -134,6 +136,149 @@ class WebScanner:
             self.logger.error(f"Error extracting emails from {file_path}: {str(e)}")
             
         return emails
+
+    def _is_processable_url(self, url: str) -> bool:
+    """Check if URL potentially contains processable content."""
+    # File extensions to look for
+    extensions = {
+        '.xlsx', '.xls', '.doc', '.docx', '.pdf', 
+        '.txt', '.csv', '.rtf', '.xml', '.json'
+    }
+    
+    # Convert URL to lowercase for case-insensitive matching
+    url_lower = url.lower()
+    
+    # Check file extensions
+    if any(ext in url_lower for ext in extensions):
+        return True
+        
+    # Check common document paths
+    doc_paths = {
+        '/documents/', '/docs/', '/files/', 
+        '/download/', '/downloads/', '/shared/',
+        '/media/', '/uploads/', '/resource',
+        '/assets/', '/public/', '/publications/'
+    }
+    
+    if any(path in url_lower for path in doc_paths):
+        return True
+        
+    return False
+
+async def find_documents(self, content: str, base_url: str) -> Set[str]:
+    """Find document links in content."""
+    documents = set()
+    try:
+        soup = BeautifulSoup(content, 'html.parser')
+        
+        # Find all links
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            # Handle both relative and absolute URLs
+            full_url = urljoin(base_url, href)
+            
+            # Decode URL-encoded characters
+            decoded_url = urllib.parse.unquote(full_url)
+            
+            if self._is_same_domain(decoded_url) and self._is_processable_url(decoded_url):
+                documents.add(decoded_url)
+                
+        # Also look for embedded frames and objects
+        for elem in soup.find_all(['iframe', 'embed', 'object']):
+            src = elem.get('src', elem.get('data', ''))
+            if src:
+                full_url = urljoin(base_url, src)
+                decoded_url = urllib.parse.unquote(full_url)
+                if self._is_same_domain(decoded_url) and self._is_processable_url(decoded_url):
+                    documents.add(decoded_url)
+                    
+    except Exception as e:
+        self.logger.error(f"Error finding documents: {str(e)}")
+        
+    return documents
+
+async def process_file_content(self, content: bytes, content_type: str) -> Set[str]:
+    """Process file content safely in memory."""
+    emails = set()
+    try:
+        # Handle Excel files
+        if 'spreadsheet' in content_type or content_type.endswith(('xlsx', 'xls')):
+            # Create in-memory file-like object
+            import io
+            xlsx_file = io.BytesIO(content)
+            wb = xlrd.open_workbook(file_contents=content)
+            for sheet in wb.sheets():
+                for row in range(sheet.nrows):
+                    for col in range(sheet.ncols):
+                        cell_value = str(sheet.cell_value(row, col))
+                        emails.update(self.find_emails(cell_value))
+                        
+        # Handle PDF files
+        elif 'pdf' in content_type:
+            with io.BytesIO(content) as pdf_stream:
+                pdf = fitz.open(stream=pdf_stream, filetype="pdf")
+                text = ""
+                for page in pdf:
+                    text += page.get_text()
+                emails.update(self.find_emails(text))
+                
+        # Handle Word documents
+        elif 'word' in content_type or content_type.endswith(('doc', 'docx')):
+            with io.BytesIO(content) as doc_stream:
+                doc = Document(doc_stream)
+                text = ""
+                for para in doc.paragraphs:
+                    text += para.text + "\n"
+                emails.update(self.find_emails(text))
+                
+    except Exception as e:
+        self.logger.error(f"Error processing file content: {str(e)}")
+        
+    return emails
+
+async def recursive_scan(self, url: str, depth: int = 3) -> Set[str]:
+    """Recursively scan URLs for content and files."""
+    if depth <= 0 or url in self.visited_urls:
+        return set()
+        
+    self.visited_urls.add(url)
+    emails = set()
+    
+    try:
+        content, content_type, status = await self.fetch_url(url)
+        
+        if status != 200:
+            return emails
+            
+        # Process regular web pages
+        if 'text/html' in content_type:
+            # Extract emails from HTML content
+            html_content = content.decode('utf-8', errors='ignore')
+            emails.update(self.find_emails(html_content))
+            
+            # Find document links
+            doc_urls = await self.find_documents(html_content, url)
+            # Find dynamic pages
+            dynamic_urls = await self.find_dynamic_pages(html_content, url)
+            
+            # Combine all discovered URLs
+            all_urls = doc_urls.union(dynamic_urls)
+            
+            # Process discovered URLs
+            for discovered_url in all_urls:
+                if discovered_url not in self.visited_urls:
+                    sub_emails = await self.recursive_scan(discovered_url, depth - 1)
+                    emails.update(sub_emails)
+                    
+        # Process documents directly
+        elif self._is_processable_url(url):
+            file_emails = await self.process_file_content(content, content_type)
+            emails.update(file_emails)
+            
+    except Exception as e:
+        self.logger.error(f"Error in recursive scan of {url}: {str(e)}")
+        
+    return emails
 
     def _is_valid_email(self, email: str) -> bool:
         if email.endswith(('.js', '.css', '.jpg', '.png', '.gif', '.svg')):
