@@ -18,13 +18,14 @@ import dns.resolver
 
 class WebScanner:
     def __init__(self, base_url: str, max_workers: int = 10, timeout: int = 10):
-        self.base_url = base_url
-        self.domain = urlparse(base_url).netloc if '://' in base_url else base_url
+        # Ensure base_url has proper format
+        self.base_url = base_url if base_url.startswith(('http://', 'https://')) else f'http://{base_url}'
+        self.domain = urlparse(self.base_url).netloc
         self.max_workers = max_workers
         self.timeout = timeout
         self.session = self._create_session()
         self.visited_urls = set()
-        self.rate_limiter = asyncio.Semaphore(5)  # Rate limiting
+        self.rate_limiter = asyncio.Semaphore(5)
         
         # Configure logging
         logging.basicConfig(
@@ -54,30 +55,24 @@ class WebScanner:
         """Fetch URL content with rate limiting and error handling."""
         async with self.rate_limiter:
             try:
+                # Ensure URL is properly formatted
+                if not url.startswith(('http://', 'https://')):
+                    url = urljoin(self.base_url, url)
+                
+                self.logger.info(f"Fetching: {url}")
                 await asyncio.sleep(random.uniform(0.5, 1.5))  # Polite delay
                 async with self.session.get(url, ssl=False) as response:
                     content = await response.text()
                     return content, response.status
+            except aiohttp.ClientError as e:
+                self.logger.error(f"Connection error for {url}: {str(e)}")
+                return "", 0
             except Exception as e:
-                self.logger.error(f"Error fetching {url}: {e}")
+                self.logger.error(f"Error fetching {url}: {str(e)}")
                 return "", 0
 
-    async def find_emails(self, content: str) -> Set[str]:
-        """Extract email addresses using improved regex pattern."""
-        email_pattern = r'''(?:[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})'''
-        emails = set(re.findall(email_pattern, content))
-        return {email for email in emails if self._is_valid_email(email)}
-
-    def _is_valid_email(self, email: str) -> bool:
-        """Validate email addresses with more comprehensive checks."""
-        if email.endswith(('.js', '.css', '.jpg', '.png', '.gif', '.svg')):
-            return False
-        
-        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-        return bool(re.match(pattern, email))
-
     async def scan_directories(self) -> Set[str]:
-        """Scan common directories with improved wordlist and parallel processing."""
+        """Scan common directories with improved URL handling."""
         common_paths = [
             "admin", "login", "dashboard", "user", "api", "wp-admin", 
             "uploads", "images", "includes", "js", "css", "static",
@@ -87,17 +82,24 @@ class WebScanner:
         
         directories = set()
         async def check_directory(path: str):
-            url = urljoin(self.base_url, path)
-            content, status = await self.fetch_url(url)
-            if status == 200:
-                directories.add(url)
-                # Also check for potential sensitive files
-                for ext in ['.php', '.txt', '.html', '.xml', '.json']:
-                    file_url = url + '/index' + ext
-                    file_content, file_status = await self.fetch_url(file_url)
-                    if file_status == 200:
-                        directories.add(file_url)
+            try:
+                # Properly join the base URL with the path
+                url = urljoin(self.base_url, path)
+                self.logger.info(f"Checking directory: {url}")
+                content, status = await self.fetch_url(url)
+                
+                if status == 200:
+                    directories.add(url)
+                    # Also check for potential sensitive files
+                    for ext in ['.php', '.txt', '.html', '.xml', '.json']:
+                        file_url = urljoin(url + '/', 'index' + ext)
+                        file_content, file_status = await self.fetch_url(file_url)
+                        if file_status == 200:
+                            directories.add(file_url)
+            except Exception as e:
+                self.logger.error(f"Error checking directory {path}: {str(e)}")
 
+        # Create tasks for all directories
         tasks = [check_directory(path) for path in common_paths]
         await asyncio.gather(*tasks)
         return directories
@@ -205,7 +207,7 @@ async def main():
             print(f"  - {directory}")
             
         print(f"\nSubdomains found ({len(results['subdomains'])}):")
-        for subdomain in results['subdomain']:
+        for subdomain in results['subdomains']:
             print(f"  - {subdomain}")
             
         print(f"\nScan completed in {results['scan_time']}")
