@@ -137,33 +137,33 @@ class WebScanner:
             
         return emails
 
-    def _is_processable_url(self, url: str) -> bool:
-        """Check if URL potentially contains processable content."""
+def _is_processable_url(self, url: str) -> bool:
+    """Check if URL potentially contains processable content."""
     # File extensions to look for
     extensions = {
-        '.xlsx', '.xls', '.doc', '.docx', '.pdf', 
+        '.xlsx', '.xls', '.doc', '.docx', '.pdf',
         '.txt', '.csv', '.rtf', '.xml', '.json'
     }
-    
+
     # Convert URL to lowercase for case-insensitive matching
     url_lower = url.lower()
-    
+
     # Check file extensions
     if any(ext in url_lower for ext in extensions):
         return True
-        
+
     # Check common document paths
     doc_paths = {
-        '/documents/', '/docs/', '/files/', 
+        '/documents/', '/docs/', '/files/',
         '/download/', '/downloads/', '/shared/',
         '/media/', '/uploads/', '/resource',
         '/assets/', '/public/', '/publications/'
     }
-    
+
     if any(path in url_lower for path in doc_paths):
         return True
-        
-    return False
+
+    return False  # Ensure return is at the correct indentation
 
 async def find_documents(self, content: str, base_url: str) -> Set[str]:
         """Find document links in content."""
