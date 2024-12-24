@@ -241,6 +241,44 @@ async def process_file_content(self, content: bytes, content_type: str) -> Set[s
         
     return emails
 
+    async def scan(self) -> Dict:
+        self.logger.info(f"Starting enhanced scan of {self.base_url}")
+        start_time = time.time()
+
+        all_emails = set()
+        directories = await self.scan_directories()
+        subdomains = await self.enumerate_subdomains()
+
+        # Gather all URLs to scan
+        urls_to_scan = {self.base_url}
+        urls_to_scan.update(directories)
+        urls_to_scan.update(f"http://{sub}" for sub in subdomains)
+
+        # Recursively scan each URL
+        for url in urls_to_scan:
+            try:
+                emails = await self.recursive_scan(url)
+                all_emails.update(emails)
+            except Exception as e:
+                self.logger.error(f"Error scanning URL {url}: {str(e)}")
+
+        elapsed_time = time.time() - start_time
+        
+        results = {
+            "emails": sorted(list(all_emails)),
+            "directories": sorted(list(directories)),
+            "subdomains": sorted(list(subdomains)),
+            "scan_time": f"{elapsed_time:.2f} seconds",
+            "total_urls_scanned": len(self.visited_urls),
+            "total_files_processed": len(self.visited_files)
+        }
+
+        with open('scan_results.json', 'w') as f:
+            json.dump(results, f, indent=4)
+
+        self.logger.info(f"Scan completed in {elapsed_time:.2f} seconds")
+        return results
+
 async def recursive_scan(self, url: str, depth: int = 3) -> Set[str]:
     """Recursively scan URLs for content and files."""
     if depth <= 0 or url in self.visited_urls:
@@ -400,44 +438,6 @@ async def recursive_scan(self, url: str, depth: int = 3) -> Set[str]:
             self.logger.error(f"Error in recursive scan of {url}: {str(e)}")
             
         return emails
-
-    async def scan(self) -> Dict:
-        self.logger.info(f"Starting enhanced scan of {self.base_url}")
-        start_time = time.time()
-
-        all_emails = set()
-        directories = await self.scan_directories()
-        subdomains = await self.enumerate_subdomains()
-
-        # Gather all URLs to scan
-        urls_to_scan = {self.base_url}
-        urls_to_scan.update(directories)
-        urls_to_scan.update(f"http://{sub}" for sub in subdomains)
-
-        # Recursively scan each URL
-        for url in urls_to_scan:
-            try:
-                emails = await self.recursive_scan(url)
-                all_emails.update(emails)
-            except Exception as e:
-                self.logger.error(f"Error scanning URL {url}: {str(e)}")
-
-        elapsed_time = time.time() - start_time
-        
-        results = {
-            "emails": sorted(list(all_emails)),
-            "directories": sorted(list(directories)),
-            "subdomains": sorted(list(subdomains)),
-            "scan_time": f"{elapsed_time:.2f} seconds",
-            "total_urls_scanned": len(self.visited_urls),
-            "total_files_processed": len(self.visited_files)
-        }
-
-        with open('scan_results.json', 'w') as f:
-            json.dump(results, f, indent=4)
-
-        self.logger.info(f"Scan completed in {elapsed_time:.2f} seconds")
-        return results
 
     async def scan_directories(self) -> Set[str]:
         common_paths = [
