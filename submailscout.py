@@ -415,8 +415,8 @@ class WebScanner:
     
             return subdomains
     
-        async def close(self):
-            await self.session.close()
+            async def close(self):
+                await self.session.close()
 
 async def main():
     print("Enter the target domain (e.g., example.com):", end=" ")
