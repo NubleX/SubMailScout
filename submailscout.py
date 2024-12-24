@@ -1,184 +1,219 @@
 import requests
 from bs4 import BeautifulSoup
 import re
-from urllib.parse import urljoin
-from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urljoin, urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 import random
 from fake_useragent import UserAgent
 import socket
 from contextlib import closing
 import json
+import logging
+import aiohttp
+import asyncio
+from typing import Set, Tuple, Dict
+import tqdm
+import dns.resolver
 
-# Disable insecure request warnings
-def disable_insecure_request_warning():
-    from requests.packages.urllib3.exceptions import InsecureRequestWarning
-    requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+class WebScanner:
+    def __init__(self, base_url: str, max_workers: int = 10, timeout: int = 10):
+        self.base_url = base_url
+        self.domain = urlparse(base_url).netloc if '://' in base_url else base_url
+        self.max_workers = max_workers
+        self.timeout = timeout
+        self.session = self._create_session()
+        self.visited_urls = set()
+        self.rate_limiter = asyncio.Semaphore(5)  # Rate limiting
+        
+        # Configure logging
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler('scanner.log'),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
 
-def get_random_user_agent():
-    """Generate a random User-Agent string."""
-    ua = UserAgent()
-    return ua.random
+    def _create_session(self) -> aiohttp.ClientSession:
+        """Create an aiohttp session with custom headers and configuration."""
+        return aiohttp.ClientSession(
+            headers={
+                "User-Agent": UserAgent().random,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Accept-Encoding": "gzip, deflate",
+                "Connection": "keep-alive",
+            },
+            timeout=aiohttp.ClientTimeout(total=self.timeout)
+        )
 
-def request_with_delay(url, verify=False):
-    """Make a request with a random delay and User-Agent."""
-    headers = {"User-Agent": get_random_user_agent()}
-    time.sleep(random.uniform(0.5, 2.0))  # Random delay between 0.5 to 2 seconds
-    response = requests.get(url, headers=headers, verify=verify, timeout=10)
-    drop_connection(response)
-    return response
-
-def drop_connection(response):
-    """Close the socket connection to drop the handshake."""
-    try:
-        with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
-            sock.close()
-    except Exception as e:
-        print(f"Error dropping connection: {e}")
-
-def harvest_emails(content):
-    """Extract email addresses from content, filtering valid emails."""
-    emails = set(re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', content))
-    valid_emails = {email for email in emails if not email.endswith(('.js', '.css', '.jpg', '.png', '.gif', '.svg'))}
-    return valid_emails
-
-def regex(content):
-pattern = r'(\"|\')(\\/[\\w\\d\\?\\/&=#.!:_-]+)(\"|\')'
-    matches = re.findall(pattern, content)
-    response = ""
-    i = 0
-    for match in matches:
-        i += 1
-        if i == len(matches):
-            response += match[1]
-        else:
-            response += match[1] + "\n"
-    return response
-
-def parse_robots_txt(base_url):
-    """Parse the robots.txt file for additional URLs."""
-    urls = set()
-    try:
-        robots_url = urljoin(base_url, '/robots.txt')
-        response = request_with_delay(robots_url)
-        if response.status_code == 200:
-            for line in response.text.splitlines():
-                if line.lower().startswith('allow:') or line.lower().startswith('disallow:'):
-                    path = line.split(':', 1)[1].strip()
-                    if path and not path.startswith('#'):
-                        urls.add(urljoin(base_url, path))
-    except Exception as e:
-        print(f"Error fetching robots.txt: {e}")
-    return urls
-
-def fetch_emails_from_url(url):
-    """Fetch emails from the specified URL."""
-    emails = set()
-    try:
-        print(f"[INFO] Scanning URL: {url}")
-        response = request_with_delay(url)
-        emails.update(harvest_emails(response.text))
-        # Additional scraping from scripts
-        soup = BeautifulSoup(response.text, 'html5lib')
-        scripts = soup.find_all('script')
-        for script in scripts:
+    async def fetch_url(self, url: str) -> Tuple[str, int]:
+        """Fetch URL content with rate limiting and error handling."""
+        async with self.rate_limiter:
             try:
-                if script.get('src') and script['src'].startswith('/'):
-                    script_url = urljoin(url, script['src'])
-                    print(f"[DEBUG] Fetching script: {script_url}")
-                    script_response = request_with_delay(script_url)
-                    emails.update(harvest_emails(script_response.text))
+                await asyncio.sleep(random.uniform(0.5, 1.5))  # Polite delay
+                async with self.session.get(url, ssl=False) as response:
+                    content = await response.text()
+                    return content, response.status
             except Exception as e:
-                print(f"Error fetching script: {e}")
-    except Exception as e:
-        print(f"Error fetching emails from {url}: {e}")
-    return emails
+                self.logger.error(f"Error fetching {url}: {e}")
+                return "", 0
 
-def scan_directories(base_url):
-    """Scan directories on the domain for additional paths."""
-    directories = set()
-    common_paths = ["admin", "login", "dashboard", "user", "api", "wp-admin", "uploads", "images"]
-    for path in common_paths:
-        url = urljoin(base_url, path)
-        try:
-            print(f"[INFO] Scanning directory: {url}")
-            response = request_with_delay(url)
-            if response.status_code == 200:
+    async def find_emails(self, content: str) -> Set[str]:
+        """Extract email addresses using improved regex pattern."""
+        email_pattern = r'''(?:[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})'''
+        emails = set(re.findall(email_pattern, content))
+        return {email for email in emails if self._is_valid_email(email)}
+
+    def _is_valid_email(self, email: str) -> bool:
+        """Validate email addresses with more comprehensive checks."""
+        if email.endswith(('.js', '.css', '.jpg', '.png', '.gif', '.svg')):
+            return False
+        
+        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        return bool(re.match(pattern, email))
+
+    async def scan_directories(self) -> Set[str]:
+        """Scan common directories with improved wordlist and parallel processing."""
+        common_paths = [
+            "admin", "login", "dashboard", "user", "api", "wp-admin", 
+            "uploads", "images", "includes", "js", "css", "static",
+            "media", "download", "downloads", "content", "assets",
+            "backup", "db", "sql", "dev", "test", "staging"
+        ]
+        
+        directories = set()
+        async def check_directory(path: str):
+            url = urljoin(self.base_url, path)
+            content, status = await self.fetch_url(url)
+            if status == 200:
                 directories.add(url)
-        except Exception as e:
-            print(f"Error scanning directory {url}: {e}")
-    return directories
+                # Also check for potential sensitive files
+                for ext in ['.php', '.txt', '.html', '.xml', '.json']:
+                    file_url = url + '/index' + ext
+                    file_content, file_status = await self.fetch_url(file_url)
+                    if file_status == 200:
+                        directories.add(file_url)
 
-def enumerate_subdomains(domain):
-    """Enumerate subdomains using multiple online sources."""
-    subdomains = set()
-    engines = ["https://crt.sh/?q=%25.{domain}",
-               "https://api.sublist3r.com/search.php?domain={domain}"]
+        tasks = [check_directory(path) for path in common_paths]
+        await asyncio.gather(*tasks)
+        return directories
 
-    for engine in engines:
+    async def enumerate_subdomains(self) -> Set[str]:
+        """Enumerate subdomains using multiple techniques."""
+        subdomains = set()
+        
+        # DNS enumeration
+        async def check_dns_record(subdomain: str):
+            try:
+                answers = await asyncio.get_event_loop().run_in_executor(
+                    None, dns.resolver.resolve, f"{subdomain}.{self.domain}", 'A'
+                )
+                if answers:
+                    subdomains.add(f"{subdomain}.{self.domain}")
+            except:
+                pass
+
+        # Common subdomain prefixes
+        common_subdomains = ['www', 'mail', 'remote', 'blog', 'webmail', 'server',
+                           'ns1', 'ns2', 'smtp', 'secure', 'vpn', 'api', 'dev',
+                           'staging', 'test', 'portal', 'admin']
+
+        tasks = [check_dns_record(sub) for sub in common_subdomains]
+        await asyncio.gather(*tasks)
+        
+        # Certificate transparency logs
         try:
-            engine_url = engine.format(domain=domain)
-            print(f"[INFO] Querying: {engine_url}")
-            response = request_with_delay(engine_url)
-            subdomains.update(re.findall(r'\b(?:[a-zA-Z0-9.-]+\.){1,}[a-zA-Z]{2,}\b', response.text))
+            url = f"https://crt.sh/?q=%.{self.domain}&output=json"
+            async with self.session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    for entry in data:
+                        name = entry.get('name_value', '').lower()
+                        if name.endswith(self.domain):
+                            subdomains.add(name)
         except Exception as e:
-            print(f"Error querying {engine}: {e}")
+            self.logger.error(f"Error querying certificate logs: {e}")
 
-    # Filter and sort unique subdomains
-    subdomains = {sub for sub in subdomains if domain in sub and sub != domain}
-    return subdomains
+        return subdomains
 
-def fetch_emails_and_subdomains(base_url, domain):
-    """Fetch emails and map subdomains from the specified domain."""
-    emails = set()
-    directories = set()
+    async def scan(self) -> Dict:
+        """Main scanning function with progress reporting."""
+        self.logger.info(f"Starting scan of {self.base_url}")
+        start_time = time.time()
 
-    print("[INFO] Enumerating subdomains...")
-    subdomains = enumerate_subdomains(domain)
+        # Parallel scanning
+        emails = set()
+        directories = await self.scan_directories()
+        subdomains = await self.enumerate_subdomains()
 
-    for subdomain in subdomains:
-        sub_url = f"http://{subdomain}"
-        print(f"[INFO] Processing subdomain: {sub_url}")
-        emails.update(fetch_emails_from_url(sub_url))
+        # Scan found locations for emails
+        urls_to_scan = {self.base_url}
+        urls_to_scan.update(directories)
+        urls_to_scan.update(f"http://{sub}" for sub in subdomains)
 
-        # Scan directories in the subdomain
-        directories.update(scan_directories(sub_url))
+        async def scan_url(url: str):
+            content, _ = await self.fetch_url(url)
+            found_emails = await self.find_emails(content)
+            emails.update(found_emails)
 
-    # Fetch emails and directories from the main domain
-    print(f"[INFO] Processing main domain: {base_url}")
-    emails.update(fetch_emails_from_url(base_url))
-    directories.update(scan_directories(base_url))
+        tasks = [scan_url(url) for url in urls_to_scan]
+        with tqdm.tqdm(total=len(tasks), desc="Scanning URLs") as pbar:
+            for task in asyncio.as_completed(tasks):
+                await task
+                pbar.update(1)
 
-    return emails, directories, subdomains
+        elapsed_time = time.time() - start_time
+        
+        results = {
+            "emails": sorted(list(emails)),
+            "directories": sorted(list(directories)),
+            "subdomains": sorted(list(subdomains)),
+            "scan_time": f"{elapsed_time:.2f} seconds",
+            "total_urls_scanned": len(urls_to_scan)
+        }
 
-def main():
-    disable_insecure_request_warning()
+        # Save results to file
+        with open('scan_results.json', 'w') as f:
+            json.dump(results, f, indent=4)
 
+        self.logger.info(f"Scan completed in {elapsed_time:.2f} seconds")
+        return results
+
+    async def close(self):
+        """Clean up resources."""
+        await self.session.close()
+
+async def main():
     print("Enter the target domain (e.g., example.com):", end=" ")
     target_domain = input().strip()
-
-    print("\n[+] Mapping the domain and harvesting emails...")
-    start_time = time.time()
-
-    base_url = f"http://{target_domain}"
-    emails, directories, subdomains = fetch_emails_and_subdomains(base_url, target_domain)
-
-    elapsed_time = time.time() - start_time
-    print(f"[+] Found {len(emails)} email addresses, {len(directories)} directories, and {len(subdomains)} subdomains in {elapsed_time:.2f} seconds.")
-
-    # Print results
-    print("\n--- Results ---")
-    print("Emails:")
-    for email in emails:
-        print(email)
-
-    print("\nDirectories:")
-    for directory in directories:
-        print(directory)
-
-    print("\nSubdomains:")
-    for subdomain in subdomains:
-        print(subdomain)
+    
+    scanner = WebScanner(target_domain)
+    try:
+        results = await scanner.scan()
+        
+        print("\n=== Scan Results ===")
+        print(f"\nEmails found ({len(results['emails'])}):")
+        for email in results['emails']:
+            print(f"  - {email}")
+            
+        print(f"\nDirectories found ({len(results['directories'])}):")
+        for directory in results['directories']:
+            print(f"  - {directory}")
+            
+        print(f"\nSubdomains found ({len(results['subdomains'])}):")
+        for subdomain in results['subdomain']:
+            print(f"  - {subdomain}")
+            
+        print(f"\nScan completed in {results['scan_time']}")
+        print(f"Total URLs scanned: {results['total_urls_scanned']}")
+        print("\nFull results have been saved to 'scan_results.json'")
+        
+    finally:
+        await scanner.close()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
