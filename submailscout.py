@@ -471,7 +471,7 @@ async def scan_directories(self) -> Set[str]:
         await asyncio.gather(*tasks)
         return directories
 
-    async def enumerate_subdomains(self) -> Set[str]:
+async def enumerate_subdomains(self) -> Set[str]:
         subdomains = set()
         
         async def check_dns_record(subdomain: str):
