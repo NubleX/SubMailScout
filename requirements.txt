@@ -12,3 +12,4 @@ xlrd
 python-magic
 yarl
 libmagic
+python-magic-bin==0.4.14
