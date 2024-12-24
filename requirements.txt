@@ -11,3 +11,4 @@ python-docx
 xlrd
 python-magic
 yarl
+libmagic
