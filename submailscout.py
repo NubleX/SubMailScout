@@ -138,7 +138,7 @@ class WebScanner:
         return emails
 
     def _is_processable_url(self, url: str) -> bool:
-    """Check if URL potentially contains processable content."""
+        """Check if URL potentially contains processable content."""
     # File extensions to look for
     extensions = {
         '.xlsx', '.xls', '.doc', '.docx', '.pdf', 
