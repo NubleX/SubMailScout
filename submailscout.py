@@ -106,6 +106,41 @@ class WebScanner:
             
         return False
 
+    async def scan(self) -> Dict:
+        start_time = time.time()
+
+        all_emails = set()
+        directories = await self.scan_directories()
+        subdomains = await self.enumerate_subdomains()
+
+        # Scan URLs
+        urls_to_scan = {self.base_url}
+        urls_to_scan.update(directories)
+        urls_to_scan.update(f"http://{sub}" for sub in subdomains)
+
+        for url in urls_to_scan:
+            try:
+                emails = await self.recursive_scan(url)
+                all_emails.update(emails)
+            except Exception as e:
+                self.logger.error(f"Error scanning URL {url}: {str(e)}")
+
+        elapsed_time = time.time() - start_time
+        
+        results = {
+            "emails": sorted(list(all_emails)),
+            "directories": sorted(list(directories)),
+            "subdomains": sorted(list(subdomains)),
+            "scan_time": f"{elapsed_time:.2f} seconds",
+            "total_urls_scanned": len(self.visited_urls),
+            "total_files_processed": len(self.visited_files)
+        }
+
+        with open('scan_results.json', 'w') as f:
+            json.dump(results, f, indent=4)
+
+        return results
+
     async def fetch_url(self, url: str, is_file: bool = False) -> Tuple[bytes, str, int]:
         """Fetch URL content with enhanced file type detection."""
         async with self.rate_limiter:
