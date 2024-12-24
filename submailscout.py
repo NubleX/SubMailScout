@@ -116,7 +116,7 @@ class WebScanner:
         subdomains = set()
 
         # Scan directories
-        directories = await self.find_documents(await self.fetch_url(self.base_url)[0], self.base_url)
+        directories = await self.find_documents(await self.fetch_url(self.base_url), self.base_url)
 
         # Enumerate subdomains
         # (If a subdomain enumeration method exists, add it here)
