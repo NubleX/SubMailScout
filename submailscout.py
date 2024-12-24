@@ -106,6 +106,39 @@ class WebScanner:
             
         return False
 
+    async def scan(self) -> Dict:
+        """Perform the complete scan for emails, directories, and subdomains."""
+        self.logger.info(f"Starting scan of {self.base_url}")
+        start_time = time.time()
+
+        all_emails = set()
+        directories = set()
+        subdomains = set()
+
+        # Scan directories
+        directories = await self.find_documents(await self.fetch_url(self.base_url)[0], self.base_url)
+
+        # Enumerate subdomains
+        # (If a subdomain enumeration method exists, add it here)
+
+        elapsed_time = time.time() - start_time
+
+        results = {
+            "emails": list(all_emails),
+            "directories": list(directories),
+            "subdomains": list(subdomains),
+            "scan_time": f"{elapsed_time:.2f} seconds",
+            "total_urls_scanned": len(self.visited_urls),
+            "total_files_processed": len(self.visited_files),
+        }
+
+        # Save results to a file
+        with open('scan_results.json', 'w') as f:
+            json.dump(results, f, indent=4)
+
+        self.logger.info(f"Scan completed in {elapsed_time:.2f} seconds")
+        return results
+
     async def fetch_url(self, url: str, is_file: bool = False) -> Tuple[bytes, str, int]:
         """Fetch URL content with enhanced file type detection."""
         async with self.rate_limiter:
