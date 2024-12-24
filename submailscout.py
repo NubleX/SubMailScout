@@ -106,39 +106,6 @@ class WebScanner:
             
         return False
 
-    async def scan(self) -> Dict:
-        """Perform the complete scan for emails, directories, and subdomains."""
-        self.logger.info(f"Starting scan of {self.base_url}")
-        start_time = time.time()
-
-        all_emails = set()
-        directories = set()
-        subdomains = set()
-
-        # Scan directories
-        directories = await self.find_documents(await self.fetch_url(self.base_url), self.base_url)
-
-        # Enumerate subdomains
-        # (If a subdomain enumeration method exists, add it here)
-
-        elapsed_time = time.time() - start_time
-
-        results = {
-            "emails": list(all_emails),
-            "directories": list(directories),
-            "subdomains": list(subdomains),
-            "scan_time": f"{elapsed_time:.2f} seconds",
-            "total_urls_scanned": len(self.visited_urls),
-            "total_files_processed": len(self.visited_files),
-        }
-
-        # Save results to a file
-        with open('scan_results.json', 'w') as f:
-            json.dump(results, f, indent=4)
-
-        self.logger.info(f"Scan completed in {elapsed_time:.2f} seconds")
-        return results
-
     async def fetch_url(self, url: str, is_file: bool = False) -> Tuple[bytes, str, int]:
         """Fetch URL content with enhanced file type detection."""
         async with self.rate_limiter:
@@ -404,19 +371,20 @@ class WebScanner:
                     directories.add(url)
                     for ext in ['.php', '.txt', '.html', '.xml', '.json']:
                         file_url = urljoin(url + '/', 'index' + ext)
-                        file_content, file_type, file_status = await self.fetch_url(file_url)  # Fixed unpacking
+                        file_content, file_type, file_status = await self.fetch_url(file_url)
                         if file_status == 200:
                             directories.add(file_url)
             except Exception as e:
                 self.logger.error(f"Error checking directory {path}: {str(e)}")
-    
+
         tasks = [check_directory(path) for path in common_paths]
         await asyncio.gather(*tasks)
         return directories
-    
+
     async def enumerate_subdomains(self) -> Set[str]:
+        """Enumerate subdomains through DNS and certificate transparency logs."""
         subdomains = set()
-            
+        
         async def check_dns_record(subdomain: str):
             try:
                 answers = await asyncio.get_event_loop().run_in_executor(
@@ -426,30 +394,32 @@ class WebScanner:
                     subdomains.add(f"{subdomain}.{self.domain}")
             except:
                 pass
-    
-            common_subdomains = ['www', 'mail', 'remote', 'blog', 'webmail', 'server',
-                               'ns1', 'ns2', 'smtp', 'secure', 'vpn', 'api', 'dev',
-                               'staging', 'test', 'portal', 'admin']
-    
-            tasks = [check_dns_record(sub) for sub in common_subdomains]
-            await asyncio.gather(*tasks)
-            
-            try:
-                url = f"https://crt.sh/?q=%.{self.domain}&output=json"
-                async with self.session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        for entry in data:
-                            name = entry.get('name_value', '').lower()
-                            if name.endswith(self.domain):
-                                subdomains.add(name)
-            except Exception as e:
-                self.logger.error(f"Error querying certificate logs: {e}")
-    
-            return subdomains
-    
+
+        common_subdomains = ['www', 'mail', 'remote', 'blog', 'webmail', 'server',
+                           'ns1', 'ns2', 'smtp', 'secure', 'vpn', 'api', 'dev',
+                           'staging', 'test', 'portal', 'admin']
+
+        tasks = [check_dns_record(sub) for sub in common_subdomains]
+        await asyncio.gather(*tasks)
+        
+        try:
+            url = f"https://crt.sh/?q=%.{self.domain}&output=json"
+            async with self.session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    for entry in data:
+                        name = entry.get('name_value', '').lower()
+                        if name.endswith(self.domain):
+                            subdomains.add(name)
+        except Exception as e:
+            self.logger.error(f"Error querying certificate logs: {e}")
+
+        return subdomains
+
     async def close(self):
+        """Close the aiohttp session."""
         await self.session.close()
+
 
 async def main():
     print("Enter the target domain (e.g., example.com):", end=" ")
@@ -478,6 +448,7 @@ async def main():
         
     finally:
         await scanner.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
