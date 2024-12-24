@@ -6,3 +6,8 @@ time
 fake_useragent
 aiohttp
 tqdm
+PyMuPDF
+python-docx
+xlrd
+python-magic
+yarl
