@@ -182,20 +182,20 @@ async def find_documents(self, content: str, base_url: str) -> Set[str]:
                 
                 if self._is_same_domain(decoded_url) and self._is_processable_url(decoded_url):
                     documents.add(decoded_url)
-                
-        # Also look for embedded frames and objects
-        for elem in soup.find_all(['iframe', 'embed', 'object']):
-            src = elem.get('src', elem.get('data', ''))
-            if src:
-                full_url = urljoin(base_url, src)
-                decoded_url = urllib.parse.unquote(full_url)
-                if self._is_same_domain(decoded_url) and self._is_processable_url(decoded_url):
-                    documents.add(decoded_url)
                     
-    except Exception as e:
-        self.logger.error(f"Error finding documents: {str(e)}")
-        
-    return documents
+            # Also look for embedded frames and objects
+            for elem in soup.find_all(['iframe', 'embed', 'object']):
+                src = elem.get('src', elem.get('data', ''))
+                if src:
+                    full_url = urljoin(base_url, src)
+                    decoded_url = urllib.parse.unquote(full_url)
+                    if self._is_same_domain(decoded_url) and self._is_processable_url(decoded_url):
+                        documents.add(decoded_url)
+                    
+        except Exception as e:
+            self.logger.error(f"Error finding documents: {str(e)}")
+            
+        return documents
 
 async def process_file_content(self, content: bytes, content_type: str) -> Set[str]:
     """Process file content safely in memory."""
