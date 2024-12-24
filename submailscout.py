@@ -137,6 +137,11 @@ class WebScanner:
             
         return emails
 
+    async def close(self):
+        """Close the aiohttp session."""
+        if self.session:
+            await self.session.close()
+
 def _is_processable_url(self, url: str) -> bool:
     """Check if URL potentially contains processable content."""
     # File extensions to look for
