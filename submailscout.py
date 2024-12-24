@@ -166,22 +166,22 @@ class WebScanner:
     return False
 
 async def find_documents(self, content: str, base_url: str) -> Set[str]:
-    """Find document links in content."""
-    documents = set()
-    try:
-        soup = BeautifulSoup(content, 'html.parser')
-        
-        # Find all links
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            # Handle both relative and absolute URLs
-            full_url = urljoin(base_url, href)
+        """Find document links in content."""
+        documents = set()
+        try:
+            soup = BeautifulSoup(content, 'html.parser')
             
-            # Decode URL-encoded characters
-            decoded_url = urllib.parse.unquote(full_url)
-            
-            if self._is_same_domain(decoded_url) and self._is_processable_url(decoded_url):
-                documents.add(decoded_url)
+            # Find all links
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                # Handle both relative and absolute URLs
+                full_url = urljoin(base_url, href)
+                
+                # Decode URL-encoded characters
+                decoded_url = urllib.parse.unquote(full_url)
+                
+                if self._is_same_domain(decoded_url) and self._is_processable_url(decoded_url):
+                    documents.add(decoded_url)
                 
         # Also look for embedded frames and objects
         for elem in soup.find_all(['iframe', 'embed', 'object']):
@@ -442,18 +442,26 @@ async def recursive_scan(self, url: str, depth: int = 3) -> Set[str]:
             "backup", "db", "sql", "dev", "test", "staging"
         ]
         
+async def scan_directories(self) -> Set[str]:
+        common_paths = [
+            "admin", "login", "dashboard", "user", "api", "wp-admin", 
+            "uploads", "images", "includes", "js", "css", "static",
+            "media", "download", "downloads", "content", "assets",
+            "backup", "db", "sql", "dev", "test", "staging"
+        ]
+        
         directories = set()
         async def check_directory(path: str):
             try:
                 url = urljoin(self.base_url, path)
                 self.logger.info(f"Checking directory: {url}")
-                content, status = await self.fetch_url(url)
+                content, content_type, status = await self.fetch_url(url)  # Fixed unpacking
                 
                 if status == 200:
                     directories.add(url)
                     for ext in ['.php', '.txt', '.html', '.xml', '.json']:
                         file_url = urljoin(url + '/', 'index' + ext)
-                        file_content, file_status = await self.fetch_url(file_url)
+                        file_content, file_type, file_status = await self.fetch_url(file_url)  # Fixed unpacking
                         if file_status == 200:
                             directories.add(file_url)
             except Exception as e:
